@@ -7,3 +7,7 @@ class ClientDoesNotExist(InvalidClient):
 
 class ClientSecretNotValid(InvalidClient):
     reason = "The client secret was malformed or invalid."
+
+
+class ClientNotTrusted(InvalidClient):
+    reason = "The client is not trusted for this operation."

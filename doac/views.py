@@ -301,6 +301,8 @@ class TokenView(OAuthView):
         return super(TokenView, self).dispatch(*args, **kwargs)
 
     def post(self, request, *args, **kwargs):
+        from .exceptions.invalid_client import ClientNotTrusted
+
         try:
             self.verify_dictionary(request.POST, "grant_type", "client_id")
         except Exception, e:
@@ -332,6 +334,9 @@ class TokenView(OAuthView):
             return self.render_refresh_token()
 
         elif self.grant_type == "password":
+            if not self.client.trusted:
+                return self.render_exception_js(ClientNotTrusted())
+
             try:
                 self.verify_dictionary(request.POST, "username", "password")
             except Exception, e:
@@ -351,7 +356,7 @@ class TokenView(OAuthView):
 
         user = authenticate(username=self.username, password=self.password)
         if None is user:
-            raise AuthorizationDenied("The credentials provided did not authenticate")
+            raise AuthorizationDenied()
 
         self.authorization_token = AuthorizationToken(user=user, client=self.client)
         self.authorization_token.save()
