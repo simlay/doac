@@ -12,6 +12,8 @@ AUTO_GENERATION_HELP_TEXT = _(u'Leave blank to have it automatically generated.'
 
 
 class AccessToken(models.Model):
+    from django.contrib.contenttypes import generic
+
     user = models.ForeignKey(user_model, related_name="access_tokens")
     client = models.ForeignKey("Client", related_name="access_tokens")
 
@@ -21,7 +23,7 @@ class AccessToken(models.Model):
         blank=True,
         help_text=AUTO_GENERATION_HELP_TEXT,
     )
-    scope = models.ManyToManyField("Scope", related_name="access_tokens")
+    scope = generic.GenericRelation("ScopeMap", content_type_field="token_type", object_id_field="token_pk")
 
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
@@ -58,8 +60,10 @@ class AccessToken(models.Model):
 
 
 class AuthorizationCode(models.Model):
+    from django.contrib.contenttypes import generic
+
     client = models.ForeignKey("Client", related_name="authorization_codes")
-    scope = models.ManyToManyField("Scope", related_name="authorization_codes")
+    scope = generic.GenericRelation("ScopeMap", content_type_field="token_type", object_id_field="token_pk")
     redirect_uri = models.ForeignKey("RedirectUri", related_name="authorization_codes")
 
     token = models.CharField(
@@ -96,6 +100,8 @@ class AuthorizationCode(models.Model):
 
 
 class AuthorizationToken(models.Model):
+    from django.contrib.contenttypes import generic
+
     user = models.ForeignKey(user_model, related_name="authorization_tokens")
     client = models.ForeignKey("Client", related_name="authorization_tokens")
     token = models.CharField(
@@ -103,7 +109,7 @@ class AuthorizationToken(models.Model):
         blank=True,
         help_text=AUTO_GENERATION_HELP_TEXT,
     )
-    scope = models.ManyToManyField("Scope", related_name="authorization_tokens")
+    scope = generic.GenericRelation("ScopeMap", content_type_field="token_type", object_id_field="token_pk")
 
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
@@ -127,8 +133,10 @@ class AuthorizationToken(models.Model):
                 self.refresh_token.user = self.user
                 self.refresh_token.save()
 
-                self.refresh_token.scope = self.scope.all()
-                self.refresh_token.save()
+                scopes = self.scope.all().scopes()
+                for scope in scopes:
+                    scope_map = ScopeMap(scope=scope, token=self.refresh_token)
+                    scope_map.save()
 
                 self.is_active = False
                 self.save()
@@ -173,6 +181,7 @@ class Client(models.Model):
     )
     access_host = models.URLField(max_length=255)
     is_active = models.BooleanField(default=True)
+    trusted = models.BooleanField(default=False)
 
     objects = managers.ClientManager()
 
@@ -205,6 +214,8 @@ class RedirectUri(models.Model):
 
 
 class RefreshToken(models.Model):
+    from django.contrib.contenttypes import generic
+
     user = models.ForeignKey(user_model, related_name="refresh_tokens")
     client = models.ForeignKey("Client", related_name="refresh_tokens")
 
@@ -214,7 +225,7 @@ class RefreshToken(models.Model):
         blank=True,
         help_text=AUTO_GENERATION_HELP_TEXT,
     )
-    scope = models.ManyToManyField("Scope", related_name="refresh_tokens")
+    scope = generic.GenericRelation("ScopeMap", content_type_field="token_type", object_id_field="token_pk")
 
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(blank=True, help_text=AUTO_GENERATION_HELP_TEXT)
@@ -229,8 +240,10 @@ class RefreshToken(models.Model):
         access_token = AccessToken(client=self.client, user=self.user, refresh_token=self)
         access_token.save()
 
-        access_token.scope = self.scope.all()
-        access_token.save()
+        scopes = self.scope.all().scopes()
+        for scope in scopes:
+            scope_map = ScopeMap(scope=scope, token=access_token)
+            scope_map.save()
 
         return access_token
 
@@ -263,7 +276,7 @@ class RefreshToken(models.Model):
 
 
 class Scope(models.Model):
-    short_name = models.CharField(max_length=40, unique=True)
+    short_name = models.CharField(max_length=40, unique=True, db_index=True)
     full_name = models.CharField(max_length=255)
     description = models.TextField()
 
@@ -271,3 +284,16 @@ class Scope(models.Model):
 
     def __unicode__(self):
         return "%s (%s)" % (self.full_name, self.short_name, )
+
+
+class ScopeMap(models.Model):
+    from django.contrib.contenttypes.models import ContentType
+    from django.contrib.contenttypes import generic
+
+    scope = models.ForeignKey("Scope")
+
+    token_type = models.ForeignKey(ContentType)
+    token_pk = models.CharField(max_length=36)
+    token = generic.GenericForeignKey("token_type", "token_pk")
+
+    objects = managers.ScopeMapManager()

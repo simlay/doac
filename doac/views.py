@@ -8,7 +8,7 @@ from . import utils
 
 ALLOWED_RESPONSE_TYPES = ("code", "token", )
 
-ALLOWED_GRANT_TYPES = ("authorization_code", "refresh_token", )
+ALLOWED_GRANT_TYPES = ("authorization_code", "refresh_token", "password")
 
 
 class OAuthView(View):
@@ -102,7 +102,6 @@ class OAuthView(View):
         from .models import Client
         from .exceptions.invalid_client import ClientDoesNotExist
         from .exceptions.invalid_request import ClientNotProvided
-
         if self.client_id:
             try:
                 self.client = Client.objects.for_id(self.client_id)
@@ -154,7 +153,7 @@ class ApprovalView(OAuthView):
 
         self.client = self.authorization_code.client
         self.redirect_uri = self.authorization_code.redirect_uri
-        self.scopes = self.authorization_code.scope.all()
+        self.scopes = self.authorization_code.scope.all().scopes()
         self.state = request.POST.get("code_state", None)
 
         if "deny_access" in request.POST:
@@ -165,12 +164,14 @@ class ApprovalView(OAuthView):
     def authorization_accepted(self):
         from django.http import HttpResponseRedirect
         from .models import AuthorizationToken
+        from .models import ScopeMap
 
         self.authorization_token = AuthorizationToken(user=self.request.user, client=self.client)
         self.authorization_token.save()
 
-        self.authorization_token.scope = self.scopes
-        self.authorization_token.save()
+        for scope in self.scopes:
+            scope_map = ScopeMap(scope=scope, token=self.authorization_token)
+            scope_map.save()
 
         if self.authorization_code.response_type == "code":
             separator = "?"
@@ -256,8 +257,9 @@ class AuthorizeView(OAuthView):
         code = AuthorizationCode(client=self.client, redirect_uri=self.redirect_uri, response_type=self.response_type)
         code.save()
 
-        code.scope = self.scopes
-        code.save()
+        for scope in self.scopes:
+            scope_map = ScopeMap(scope=scope, token=code)
+            scope_map.save()
 
         return code
 
@@ -300,13 +302,13 @@ class TokenView(OAuthView):
 
     def post(self, request, *args, **kwargs):
         try:
-            self.verify_dictionary(request.POST, "grant_type", "client_id", "client_secret")
+            self.verify_dictionary(request.POST, "grant_type", "client_id")
         except Exception, e:
             return self.render_exception_js(e)
 
         if self.grant_type == "authorization_code":
             try:
-                self.verify_dictionary(request.POST, "code")
+                self.verify_dictionary(request.POST, "code", "client_secret")
             except Exception, e:
                 return self.render_exception_js(e)
 
@@ -321,13 +323,41 @@ class TokenView(OAuthView):
 
         elif self.grant_type == "refresh_token":
             try:
-                self.verify_dictionary(request.POST, "refresh_token")
+                self.verify_dictionary(request.POST, "refresh_token", "client_secret")
             except Exception, e:
                 return self.render_exception_js(e)
 
             self.access_token = self.refresh_token.generate_access_token()
 
             return self.render_refresh_token()
+
+        elif self.grant_type == "password":
+            try:
+                self.verify_dictionary(request.POST, "username", "password")
+            except Exception, e:
+                return self.render_exception_js(e)
+
+            try:
+                self.authenticate_user()
+            except Exception, e:
+                return self.render_exception_js(e)
+
+            return self.render_authorization_token()
+
+    def authenticate_user(self):
+        from django.contrib.auth import authenticate
+        from .models import AuthorizationToken, Scope
+        from .exceptions.access_denied import AuthorizationDenied
+
+        user = authenticate(username=self.username, password=self.password)
+        if None is user:
+            raise AuthorizationDenied("The credentials provided did not authenticate")
+
+        self.authorization_token = AuthorizationToken(user=user, client=self.client)
+        self.authorization_token.save()
+
+        self.refresh_token = self.authorization_token.generate_refresh_token()
+        self.access_token = self.refresh_token.generate_access_token()
 
     def render_authorization_token(self):
         from .compat import now

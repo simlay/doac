@@ -151,3 +151,15 @@ class ScopeQuerySet(QuerySet):
     
     def for_short_name(self, name):
         return self.get(short_name=name)
+
+
+class ScopeMapManager(CustomManager):
+
+    def get_query_set(self):
+        return ScopeMapQuerySet(self.model)
+
+
+class ScopeMapQuerySet(QuerySet):
+
+    def scopes(self):
+        return [sm.scope for sm in self]
